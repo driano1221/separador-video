@@ -1,0 +1,47 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+.venv/
+venv/
+env/
+ENV/
+pip-wheel-metadata/
+
+# Local app output
+saidas/
+SeparadorVideo_erro.log
+*.lnk
+*.bat
+
+# Videos and generated media
+*.mp4
+*.mov
+*.mkv
+*.avi
+*.m4v
+*.webm
+*.wav
+*.mp3
+
+# Local tools, downloads, models and builds
+executaveis/
+ferramentas/ffmpeg/
+ferramentas/ffmpeg_extract/
+ferramentas/modelos/
+ferramentas/build/
+ferramentas/build_pasta/
+ferramentas/build_corrigido/
+ferramentas/encoder_cache.json
+
+# PyInstaller
+*.spec
+*.pkg
+
+# OS/editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

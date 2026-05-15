@@ -1,0 +1,54 @@
+ESTRUTURA DA PASTA
+
+- SeparadorVideo.pyw
+  Entrada principal do app. Abre direto pelo Python do Windows, sem terminal e sem .bat.
+
+- SeparadorVideo.lnk
+  Atalho para abrir o app com dois cliques.
+
+- Abrir Separador.bat
+  Entrada antiga, mantida apenas como fallback.
+
+- executaveis\
+  Onde ficam os executaveis prontos.
+
+- executaveis\SeparadorVideo\
+  Versao principal, mais rapida para abrir.
+
+- executaveis\SeparadorVideo_portatil.exe
+  Versao portatil em arquivo unico.
+
+- saidas\
+  Todos os videos gerados ficam aqui, organizados por nome do video.
+  Os cortes ficam em pastas como 2_partes, 3_partes e 4_partes.
+  As transcricoes ficam em uma pasta chamada transcricao.
+
+- app\
+  Codigo-fonte da interface, processamento de video e transcricao.
+
+- separar_video.py
+  Versao por linha de comando.
+
+- transcrever_video.py
+  Versao por linha de comando para transcricao.
+
+- ferramentas\
+  Scripts de build, cache interno do encoder e modelos de transcricao baixados.
+
+- ferramentas\ffmpeg\bin\
+  FFmpeg local usado pelo app. Deve conter ffmpeg.exe e ffprobe.exe.
+
+COMO USAR
+
+1. Abra "SeparadorVideo.lnk" ou "SeparadorVideo.pyw"
+2. Escolha o video
+3. Para cortar/comprimir:
+   escolha 2, 3 ou 4 partes, qualidade e clique em "Processar video"
+4. Para transcrever:
+   escolha o perfil de transcricao, o idioma e clique em "Transcrever video"
+
+OBSERVACAO
+
+- Se o app nao abrir, veja o arquivo SeparadorVideo_erro.log nesta pasta.
+- As versoes dentro de executaveis\ ficam mantidas como fallback, mas podem ficar desatualizadas.
+- Na primeira transcricao, o app pode demorar um pouco para baixar o modelo.
