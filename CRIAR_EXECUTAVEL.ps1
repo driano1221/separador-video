@@ -33,6 +33,8 @@ $arguments = @(
     "--hidden-import", "faster_whisper",
     "--collect-binaries", "ctranslate2",
     "--collect-data", "faster_whisper",
+    "--collect-all", "charset_normalizer",
+    "--collect-all", "chardet",
     "--exclude-module", "torch",
     "--exclude-module", "torchaudio",
     "--exclude-module", "torchvision",

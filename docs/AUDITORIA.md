@@ -28,7 +28,7 @@ As entradas devem apenas converter parametros e chamar os nucleos em `app/`.
 
 ```powershell
 python -m unittest discover -s tests -v
-python -m py_compile SeparadorVideo.pyw separar_video.py transcrever_video.py app\video_splitter_gui.py app\video_splitter_core.py app\transcription_core.py
+python -m py_compile SeparadorVideo.pyw separar_video.py transcrever_video.py app\video_splitter_gui.py app\video_workbench_gui.py app\video_splitter_core.py app\transcription_core.py app\ui_tokens.py app\ui_theme.py
 python app\video_splitter_gui.py --self-test
 git diff --check
 ```
@@ -40,7 +40,7 @@ Resultado esperado:
 - `GUI_OK` no autoteste;
 - nenhuma saida em `git diff --check`.
 
-O autoteste confirma imports e ferramentas, mas nao baixa modelo nem executa uma inferencia completa.
+O autoteste confirma tokens, ferramentas e imports do runtime, mas nao baixa modelo nem executa uma inferencia completa.
 
 ## 4. Testar um caso representativo
 

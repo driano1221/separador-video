@@ -7,9 +7,11 @@ O projeto e um aplicativo desktop local para Windows. Ele recebe um arquivo de v
 ```text
 SeparadorVideo.pyw ou app/video_splitter_gui.py
                   |
-                  +--> app/video_splitter_core.py --> FFprobe/FFmpeg --> videos
-                  |
-                  +--> app/transcription_core.py --> Faster-Whisper --> TXT/SRT/VTT/JSON
+                  `--> app/video_workbench_gui.py
+                         |
+                         +--> app/video_splitter_core.py --> FFprobe/FFmpeg --> videos
+                         |
+                         `--> app/transcription_core.py --> Faster-Whisper --> TXT/SRT/VTT/JSON
 ```
 
 Nao existe servidor, banco de dados ou API propria. A rede e usada para baixar um modelo na primeira transcricao; a inferencia ocorre localmente.
@@ -21,8 +23,13 @@ Nao existe servidor, banco de dados ou API propria. A rede e usada para baixar u
 |-- app/
 |   |-- __init__.py
 |   |-- transcription_core.py
+|   |-- ui_main_preview.py
+|   |-- ui_shell_preview.py
+|   |-- ui_theme.py
+|   |-- ui_tokens.py
 |   |-- video_splitter_core.py
-|   `-- video_splitter_gui.py
+|   |-- video_splitter_gui.py
+|   `-- video_workbench_gui.py
 |-- assets/
 |   |-- SeparadorVideo.ico
 |   |-- SeparadorVideo.png
@@ -30,7 +37,6 @@ Nao existe servidor, banco de dados ou API propria. A rede e usada para baixar u
 |   `-- interface_transcricao.png
 |-- docs/
 |-- tests/
-|   `-- test_transcription_core.py
 |-- SeparadorVideo.pyw
 |-- separar_video.py
 |-- transcrever_video.py
@@ -44,7 +50,9 @@ Nao existe servidor, banco de dados ou API propria. A rede e usada para baixar u
 | Componente | Responsabilidade | Nao deve conter |
 | --- | --- | --- |
 | `SeparadorVideo.pyw` | Preparar o diretorio e abrir a GUI sem console. | Regras de corte ou transcricao. |
-| `app/video_splitter_gui.py` | Interface, validacao de campos, threads e exibicao de progresso. | Implementacao de FFmpeg ou Whisper. |
+| `app/video_splitter_gui.py` | Adaptador compativel para iniciar a aplicacao e manter o parser de tempo legado. | Widgets ou processamento. |
+| `app/video_workbench_gui.py` | Interface, estado da sessao, threads, fila, historico e progresso. | Implementacao de FFmpeg ou Whisper. |
+| `app/ui_*.py` | Tokens, tema e componentes visuais do shell. | Regras de processamento de midia. |
 | `app/video_splitter_core.py` | Intervalos, divisao, escolha de encoder, comandos FFmpeg e progresso. | Widgets ou mensagens de janela. |
 | `app/transcription_core.py` | Modelos, download, GPU/CPU, checkpoint e formatos de transcricao. | Widgets ou parsing de argumentos CLI. |
 | `separar_video.py` | Adaptar argumentos do terminal para `ProcessingOptions`. | Duplicar a logica do nucleo. |
@@ -59,7 +67,8 @@ Nao existe servidor, banco de dados ou API propria. A rede e usada para baixar u
 4. `build_segments` calcula um recorte unico ou partes iguais.
 5. `resolve_encoder` tenta a opcao solicitada ou escolhe um encoder disponivel.
 6. FFmpeg processa os segmentos e emite progresso.
-7. O nucleo retorna `ProcessingResult` com caminhos, encoder e tamanhos.
+7. Um pedido de cancelamento encerra o subprocesso e remove a saida parcial.
+8. O nucleo retorna `ProcessingResult` com caminhos, encoder e tamanhos.
 
 Contrato importante: os tempos dos segmentos continuam referenciando o video original, mesmo quando apenas um intervalo e selecionado.
 
@@ -70,7 +79,7 @@ Contrato importante: os tempos dos segmentos continuam referenciando o video ori
 3. O perfil e traduzido para um repositorio Faster-Whisper.
 4. O modelo e baixado para `%LOCALAPPDATA%\SeparadorVideo\modelos` quando necessario.
 5. O backend escolhe CUDA `int8_float16` quando o runtime esta disponivel; caso contrario usa CPU `int8`.
-6. Segmentos parciais sao salvos em checkpoint e podem ser retomados.
+6. Segmentos parciais sao salvos em checkpoint e podem ser retomados ou preservados ao cancelar.
 7. Ao concluir, o nucleo grava `.txt`, `.srt`, `.vtt` e `.json` e remove o checkpoint.
 
 Contrato importante: um checkpoint so pode ser retomado quando arquivo, modelo, idioma, tarefa e intervalo ainda correspondem.

@@ -2,17 +2,19 @@
 
 ## Direcao visual
 
-A interface segue uma estetica rustica discreta e utilitaria: carvao, verde musgo, cobre e texto claro. Nao usa gradientes, neon, vidro, ilustracoes generativas, robos ou elementos associados a produtos de IA.
+Isto e uma mesa de trabalho para midia local. O usuario olha principalmente a timeline, o texto transcrito ou a lista de resultados; essa area recebe o maior espaco e o menor ruido.
 
-O layout concentra quatro decisoes: arquivo, intervalo, tarefa e opcoes da tarefa. O log fica recolhido por padrao.
+A sessao pode ser longa, por isso o tema escuro e o padrao. Carvao quente, linhas de um pixel e cobre restrito a selecao/acao principal tornam a janela reconhecivel sem recorrer a estetica de site ou produto de IA. O tema claro preserva a mesma hierarquia.
 
 ## Decisoes funcionais
 
-- Horarios em `HH:MM:SS`, sem uma timeline complexa.
-- Abas separadas para video e transcricao.
-- Cobre somente nas acoes principais.
-- Progresso sempre visivel e log sob demanda.
-- Dimensoes verificadas em 1000x740 e minimo de 900x720.
+- Navegacao lateral persistente para corte, transcricao, fila e historico.
+- Timeline dominante e horarios em `HH:MM:SS`.
+- Cobre somente em selecao, foco e acao principal; verde/vermelho somente em estado.
+- Progresso sempre visivel e cancelavel na barra inferior.
+- Paineis laterais redimensionaveis e estado salvo em `%LOCALAPPDATA%\SeparadorVideo`.
+- Menus de contexto, selecao multipla e barra de comandos com `Ctrl+K`.
+- Dimensoes verificadas em 1552x832 e minimo de 980x620.
 - FFmpeg no pacote e fallback automatico da transcricao para CPU.
 
 ## Referencias

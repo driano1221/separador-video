@@ -25,6 +25,8 @@ Ferramenta local para Windows: recorta, divide, comprime e transcreve videos. FF
 - Usa aceleração NVIDIA NVENC quando disponível.
 - Transcreve audio/video em português.
 - Gera arquivos `.txt`, `.srt`, `.vtt` e `.json`.
+- Mostra tarefas, progresso cancelavel e resultados recentes.
+- Preserva tema, secao ativa, filtros e largura dos paineis.
 - Organiza tudo dentro da pasta `saidas/`.
 
 Na amostra local de 120 segundos em portugues, o perfil equilibrado caiu de aproximadamente 55 s no backend anterior para 6,6 s com Faster-Whisper Turbo em uma RTX 3050 Laptop de 4 GB. Medicao e limites: [docs/INFERENCIA.md](docs/INFERENCIA.md).
@@ -39,7 +41,7 @@ Na amostra local de 120 segundos em portugues, o perfil equilibrado caiu de apro
 ## Estrutura do repositorio
 
 ```text
-app/                    nucleos e interface grafica
+app/                    nucleos, shell e interface grafica
 assets/                 icone e imagens da interface
 docs/                   arquitetura, auditoria e decisoes tecnicas
 tests/                  testes automatizados pequenos
@@ -100,12 +102,22 @@ SeparadorVideo_erro.log
 
 ## Como usar
 
-1. Clique em `Escolher video`.
+1. Clique em `ABRIR` ou pressione `Ctrl+O`.
 2. Selecione o arquivo `.mp4`, `.mov`, `.mkv`, `.avi`, `.m4v` ou `.webm`.
-3. Escolha a pasta de saida, se quiser mudar.
-4. Marque `Usar apenas um trecho` para informar inicio e fim.
-5. Em `Cortar e dividir`, escolha `Recorte unico` ou 2 a 4 partes e clique em `Gerar video`.
-6. Em `Transcrever`, escolha modelo e idioma e clique em `Transcrever`.
+3. Informe `Inicio` e `Fim` no painel direito.
+4. Em `Cortar e dividir`, escolha de 1 a 4 partes e pressione `Ctrl+Enter`.
+5. Em `Transcrever`, escolha modelo e idioma e pressione `Ctrl+Enter`.
+6. Acompanhe ou cancele a operacao na barra inferior e consulte os arquivos em `Historico`.
+
+Atalhos principais:
+
+| Atalho | Acao |
+| --- | --- |
+| `Ctrl+O` | Abrir video. |
+| `Ctrl+Enter` | Executar a acao da secao atual. |
+| `Ctrl+1` a `Ctrl+4` | Alternar entre as quatro secoes. |
+| `Ctrl+K` | Abrir a barra de comandos. |
+| `Ctrl+Shift+L` | Alternar tema claro/escuro. |
 
 As saidas ficam organizadas assim:
 
@@ -130,7 +142,7 @@ saidas/
 - `Maxima qualidade`: melhor resultado, mas demora mais.
 
 Na primeira vez, o modelo pode demorar para baixar.
-Se uma transcricao for interrompida, execute-a novamente com as mesmas opcoes: o app retoma do ultimo ponto salvo.
+Se uma transcricao for cancelada, execute-a novamente com as mesmas opcoes: o app retoma do ultimo ponto salvo.
 
 Em placas NVIDIA com 4 GB de memoria, o perfil equilibrado usa quantizacao `int8_float16` para ganhar velocidade e evitar falta de memoria. Se a GPU nao estiver disponivel, o app continua automaticamente pela CPU.
 

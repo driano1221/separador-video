@@ -2,6 +2,26 @@
 
 Alteracoes relevantes deste projeto sao registradas aqui. O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) de forma simplificada.
 
+## [0.3.0] - 2026-09-04
+
+### Adicionado
+
+- Shell de aplicacao com navegacao persistente, paineis redimensionaveis e temas escuro/claro.
+- Telas de corte, transcricao, fila e historico no mesmo fluxo de trabalho.
+- Barra de comandos com `Ctrl+K`, atalhos de secao e selecao multipla nas listas.
+- Cancelamento real de FFmpeg e de transcricao, com limpeza de videos parciais e checkpoint de texto.
+- Tokens visuais em tres camadas e testes de resolucao/contraste dos temas.
+
+### Alterado
+
+- Interface antiga substituida pela mesa de trabalho compacta e orientada a timeline.
+- Entrada grafica reduzida a um adaptador; processamento continua isolado nos nucleos.
+
+### Corrigido
+
+- Numeros da regua de tempo cortados na borda superior da timeline.
+- Textos longos sobrepostos no inspetor.
+
 ## [0.2.0] - 2026-09-03
 
 ### Adicionado

@@ -61,7 +61,7 @@ O codigo de saida esperado e `0`. Para um teste completo de cinco segundos, use 
 $LASTEXITCODE
 ```
 
-Esse teste usa o perfil equilibrado e transcreve do segundo 2 ao 7. Ele pode baixar o modelo na primeira execucao.
+Esse teste usa o perfil rapido e transcreve os primeiros sete segundos. Ele pode baixar o modelo na primeira execucao.
 
 Depois, extraia o ZIP em outro diretorio e abra o aplicativo. Isso detecta dependencias que funcionavam apenas por estarem presentes no repositorio.
 

@@ -44,6 +44,7 @@ ferramentas/build/
 ferramentas/build_pasta/
 ferramentas/build_corrigido/
 ferramentas/build_novo/
+ferramentas/_teste_executavel/
 ferramentas/encoder_cache.json
 
 # PyInstaller

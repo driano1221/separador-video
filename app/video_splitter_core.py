@@ -78,6 +78,16 @@ class ProcessingResult:
 
 ProgressCallback = Callable[[dict], None]
 LogCallback = Callable[[str], None]
+CancelCheck = Callable[[], bool]
+
+
+class OperationCancelled(RuntimeError):
+    pass
+
+
+def raise_if_cancelled(cancel_check: CancelCheck | None) -> None:
+    if cancel_check and cancel_check():
+        raise OperationCancelled("Operacao cancelada pelo usuario.")
 
 
 SUBPROCESS_KWARGS: dict = {}
@@ -497,6 +507,7 @@ def run_command_with_progress(
     expected_duration: float,
     label: str,
     progress_callback: ProgressCallback | None = None,
+    cancel_check: CancelCheck | None = None,
 ) -> None:
     progress_command = command.copy()
     progress_command[1:1] = ["-progress", "pipe:1", "-nostats", "-loglevel", "error"]
@@ -514,6 +525,13 @@ def run_command_with_progress(
     ) as process:
         assert process.stdout is not None
         for raw_line in process.stdout:
+            if cancel_check and cancel_check():
+                process.terminate()
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                raise OperationCancelled("Processamento de video cancelado.")
             line = raw_line.strip()
             if not line or "=" not in line:
                 continue
@@ -593,6 +611,7 @@ def run_ffmpeg_onepass(
     has_audio: bool,
     progress_callback: ProgressCallback | None = None,
     log_callback: LogCallback | None = None,
+    cancel_check: CancelCheck | None = None,
 ) -> None:
     command = [
         resolve_tool("ffmpeg"),
@@ -612,7 +631,13 @@ def run_ffmpeg_onepass(
         append_output_arguments(command, output_path, index, encoder, profile, has_audio)
 
     selected_duration = sum(float(segment["duration"]) for segment in segments)
-    run_command_with_progress(command, selected_duration, "Progresso geral", progress_callback)
+    run_command_with_progress(
+        command,
+        selected_duration,
+        "Progresso geral",
+        progress_callback,
+        cancel_check,
+    )
 
 
 def run_ffmpeg_sequential(
@@ -624,8 +649,10 @@ def run_ffmpeg_sequential(
     has_audio: bool,
     progress_callback: ProgressCallback | None = None,
     log_callback: LogCallback | None = None,
+    cancel_check: CancelCheck | None = None,
 ) -> None:
     for index, output_path in enumerate(output_paths):
+        raise_if_cancelled(cancel_check)
         segment = segments[index]
         command = [
             resolve_tool("ffmpeg"),
@@ -654,6 +681,7 @@ def run_ffmpeg_sequential(
             segment["duration"],
             f"Parte {segment['index']}/{len(segments)}",
             progress_callback,
+            cancel_check,
         )
 
 
@@ -661,7 +689,9 @@ def process_video(
     options: ProcessingOptions,
     progress_callback: ProgressCallback | None = None,
     log_callback: LogCallback | None = None,
+    cancel_check: CancelCheck | None = None,
 ) -> ProcessingResult:
+    raise_if_cancelled(cancel_check)
     ensure_basic_tools()
 
     input_path = options.input_path.resolve()
@@ -732,6 +762,7 @@ def process_video(
                 has_audio=has_audio,
                 progress_callback=progress_callback,
                 log_callback=log_callback,
+                cancel_check=cancel_check,
             )
         else:
             emit_log(log_callback, "Estrategia: processamento sequencial.")
@@ -744,10 +775,15 @@ def process_video(
                 has_audio=has_audio,
                 progress_callback=progress_callback,
                 log_callback=log_callback,
+                cancel_check=cancel_check,
             )
 
     try:
         run_selected_pipeline(encoder_used)
+    except OperationCancelled:
+        clean_output_paths(output_paths)
+        emit_log(log_callback, "Processamento cancelado. Arquivos parciais removidos.")
+        raise
     except subprocess.CalledProcessError as error:
         if options.encoder == "auto" and encoder_used != "libx264":
             emit_log(log_callback, "Encoder acelerado falhou. Limpando cache e tentando software x264.")
@@ -769,6 +805,7 @@ def process_video(
                 has_audio=has_audio,
                 progress_callback=progress_callback,
                 log_callback=log_callback,
+                cancel_check=cancel_check,
             )
         else:
             raise RuntimeError(error.stderr or "Falha ao executar o ffmpeg.") from error

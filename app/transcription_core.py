@@ -15,7 +15,9 @@ os.environ.setdefault("HF_HUB_ETAG_TIMEOUT", "60")
 from huggingface_hub import snapshot_download
 
 from app.video_splitter_core import (
+    CancelCheck,
     LogCallback,
+    OperationCancelled,
     ProgressCallback,
     default_output_root,
     emit_log,
@@ -25,6 +27,7 @@ from app.video_splitter_core import (
     get_project_root,
     resolve_time_range,
     resolve_tool,
+    raise_if_cancelled,
 )
 
 
@@ -886,7 +889,9 @@ def process_transcription(
     options: TranscriptionOptions,
     progress_callback: ProgressCallback | None = None,
     log_callback: LogCallback | None = None,
+    cancel_check: CancelCheck | None = None,
 ) -> TranscriptionResult:
+    raise_if_cancelled(cancel_check)
     ensure_transcription_runtime()
 
     input_path = options.input_path.resolve()
@@ -903,6 +908,7 @@ def process_transcription(
         progress_callback=progress_callback,
         log_callback=log_callback,
     )
+    raise_if_cancelled(cancel_check)
     backend = str(prepared["backend"])
     model_id = str(prepared["model_id"])
     model_path = Path(prepared["model_path"])
@@ -1005,6 +1011,14 @@ def process_transcription(
         last_checkpoint_at = time.monotonic()
         unsaved_segments = 0
         for raw_segment in segments_iterable:
+            if cancel_check and cancel_check():
+                save_transcription_checkpoint(
+                    checkpoint_path,
+                    checkpoint_metadata,
+                    serialized_segments,
+                )
+                emit_log(log_callback, "Transcricao cancelada. Checkpoint preservado para retomada.")
+                raise OperationCancelled("Transcricao cancelada pelo usuario.")
             segment = serialize_segments([raw_segment])[0]
             if segment["end"] <= resumed_from:
                 continue
@@ -1055,6 +1069,7 @@ def process_transcription(
             },
         )
         try:
+            raise_if_cancelled(cancel_check)
             openai_whisper = get_openai_whisper()
             model = openai_whisper.load_model(
                 model_id,
@@ -1071,6 +1086,9 @@ def process_transcription(
                 fp16=device == "cuda",
                 clip_timestamps=f"{range_start:.3f},{range_end:.3f}" if custom_range else "0",
             )
+            raise_if_cancelled(cancel_check)
+        except OperationCancelled:
+            raise
         except Exception as error:  # noqa: BLE001
             raise RuntimeError(
                 "Nao foi possivel transcrever com o backend alternativo OpenAI Whisper."

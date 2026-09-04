@@ -10,11 +10,15 @@ from app.transcription_core import (
     save_transcription_checkpoint,
     transcription_checkpoint_metadata,
 )
-from app.video_splitter_core import build_segments, resolve_time_range
+from app.video_splitter_core import OperationCancelled, build_segments, raise_if_cancelled, resolve_time_range
 from app.video_splitter_gui import parse_time_value
 
 
 class TranscriptionCoreTest(unittest.TestCase):
+    def test_cancel_check_raises_shared_operation_error(self):
+        with self.assertRaises(OperationCancelled):
+            raise_if_cancelled(lambda: True)
+
     def test_time_range_and_split_keep_absolute_video_times(self):
         start, end = resolve_time_range(120.0, 30.0, 90.0)
         segments = build_segments(end - start, 2, start)
