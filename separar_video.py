@@ -22,9 +22,9 @@ def parse_args() -> argparse.Namespace:
         "-p",
         "--partes",
         type=int,
-        choices=range(2, 5),
-        metavar="[2-4]",
-        help="Quantidade de partes iguais.",
+        choices=range(1, 5),
+        metavar="[1-4]",
+        help="1 para recortar ou 2 a 4 partes iguais.",
     )
     parser.add_argument(
         "--qualidade",
@@ -49,6 +49,8 @@ def parse_args() -> argparse.Namespace:
         type=float,
         help="Processa apenas os primeiros X segundos do video.",
     )
+    parser.add_argument("--inicio", type=float, default=0.0, help="Inicio do trecho em segundos.")
+    parser.add_argument("--fim", type=float, help="Fim do trecho em segundos.")
     parser.add_argument(
         "--output-root",
         type=Path,
@@ -112,6 +114,8 @@ def main() -> None:
         mode=args.modo,
         quality_profile=args.qualidade,
         sample_seconds=args.sample_seconds,
+        start_seconds=args.inicio,
+        end_seconds=args.fim,
     )
     result = process_video(options, progress_callback=progress_handler, log_callback=log)
     print(f"Pasta final: {result.output_dir}")

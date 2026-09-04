@@ -60,6 +60,8 @@ class ProcessingOptions:
     mode: str = "auto"
     quality_profile: str = "equilibrada"
     sample_seconds: float | None = None
+    start_seconds: float = 0.0
+    end_seconds: float | None = None
 
 
 @dataclass
@@ -165,6 +167,24 @@ def format_clock(total_seconds: float) -> str:
     hours, remainder = divmod(whole_seconds, 3600)
     minutes, seconds = divmod(remainder, 60)
     return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
+
+def resolve_time_range(
+    total_duration: float,
+    start_seconds: float = 0.0,
+    end_seconds: float | None = None,
+) -> tuple[float, float]:
+    start = max(0.0, float(start_seconds))
+    end = total_duration if end_seconds is None else min(float(end_seconds), total_duration)
+    if start >= total_duration:
+        raise RuntimeError("O inicio do trecho precisa estar dentro do video.")
+    if end <= start:
+        raise RuntimeError("O fim do trecho precisa ser maior que o inicio.")
+    return start, end
+
+
+def format_path_time(total_seconds: float) -> str:
+    return format_clock(total_seconds).replace(":", "-")
 
 
 def default_output_root(base_dir: Path | None = None) -> Path:
@@ -385,12 +405,12 @@ def parse_progress_time_ms(raw_value: str | None) -> int:
         return 0
 
 
-def build_segments(total_duration: float, parts: int) -> list[dict]:
+def build_segments(total_duration: float, parts: int, start_offset: float = 0.0) -> list[dict]:
     part_duration = total_duration / parts
     segments = []
     for index in range(parts):
-        start_time = index * part_duration
-        end_time = total_duration if index == parts - 1 else (index + 1) * part_duration
+        start_time = start_offset + index * part_duration
+        end_time = start_offset + (total_duration if index == parts - 1 else (index + 1) * part_duration)
         segments.append(
             {
                 "index": index + 1,
@@ -402,14 +422,29 @@ def build_segments(total_duration: float, parts: int) -> list[dict]:
     return segments
 
 
-def build_output_dir(output_root: Path, input_path: Path, parts: int) -> Path:
+def build_output_dir(
+    output_root: Path,
+    input_path: Path,
+    parts: int,
+    start_seconds: float = 0.0,
+    end_seconds: float | None = None,
+) -> Path:
     grouped_dir = output_root / input_path.stem
-    output_dir = grouped_dir / f"{parts}_partes"
+    if parts == 1:
+        folder_name = "recorte"
+    else:
+        folder_name = f"{parts}_partes"
+    if start_seconds > 0 or end_seconds is not None:
+        assert end_seconds is not None
+        folder_name += f"_{format_path_time(start_seconds)}_a_{format_path_time(end_seconds)}"
+    output_dir = grouped_dir / folder_name
     output_dir.mkdir(parents=True, exist_ok=True)
     return output_dir
 
 
 def build_output_paths(output_dir: Path, input_path: Path, parts: int) -> list[Path]:
+    if parts == 1:
+        return [output_dir / f"{input_path.stem}_recorte.mp4"]
     return [
         output_dir / f"{input_path.stem}_parte_{index:02d}_de_{parts:02d}.mp4"
         for index in range(1, parts + 1)
@@ -576,7 +611,8 @@ def run_ffmpeg_onepass(
         )
         append_output_arguments(command, output_path, index, encoder, profile, has_audio)
 
-    run_command_with_progress(command, segments[-1]["end"], "Progresso geral", progress_callback)
+    selected_duration = sum(float(segment["duration"]) for segment in segments)
+    run_command_with_progress(command, selected_duration, "Progresso geral", progress_callback)
 
 
 def run_ffmpeg_sequential(
@@ -631,8 +667,8 @@ def process_video(
     input_path = options.input_path.resolve()
     if not input_path.exists():
         raise RuntimeError(f"Arquivo nao encontrado: {input_path}")
-    if options.parts not in {2, 3, 4}:
-        raise RuntimeError("A quantidade de partes deve ser 2, 3 ou 4.")
+    if options.parts not in {1, 2, 3, 4}:
+        raise RuntimeError("A quantidade de partes deve ser de 1 a 4.")
 
     profile = QUALITY_PROFILES.get(options.quality_profile, QUALITY_PROFILES["equilibrada"])
     probe_data = ffprobe_video(input_path)
@@ -646,23 +682,39 @@ def process_video(
 
     total_duration = float(metadata["duration"])
     original_size = int(metadata.get("size", 0))
-    processed_duration = total_duration
+    range_start, range_end = resolve_time_range(
+        total_duration,
+        options.start_seconds,
+        options.end_seconds,
+    )
     if options.sample_seconds is not None:
         if options.sample_seconds <= 0:
             raise RuntimeError("--sample-seconds deve ser maior que zero.")
-        processed_duration = min(total_duration, options.sample_seconds)
+        range_end = min(range_end, range_start + options.sample_seconds)
+    processed_duration = range_end - range_start
 
     output_root = options.output_root.resolve()
     output_root.mkdir(parents=True, exist_ok=True)
-    output_dir = build_output_dir(output_root, input_path, options.parts)
+    custom_range = range_start > 0 or range_end < total_duration
+    output_dir = build_output_dir(
+        output_root,
+        input_path,
+        options.parts,
+        range_start if custom_range else 0.0,
+        range_end if custom_range else None,
+    )
     output_paths = build_output_paths(output_dir, input_path, options.parts)
     clean_output_paths(output_paths)
-    segments = build_segments(processed_duration, options.parts)
+    segments = build_segments(processed_duration, options.parts, range_start)
 
     encoder_used, encoder_reason = resolve_encoder(options.encoder, input_path, has_audio, profile)
 
     emit_log(log_callback, f"Video: {input_path.name}")
     emit_log(log_callback, f"Duracao total: {format_seconds(total_duration)}")
+    emit_log(
+        log_callback,
+        f"Trecho selecionado: {format_seconds(range_start)} a {format_seconds(range_end)}",
+    )
     emit_log(log_callback, f"Partes: {options.parts}")
     emit_log(log_callback, f"Perfil: {profile.label}")
     emit_log(log_callback, f"Encoder: {encoder_used} ({encoder_reason})")

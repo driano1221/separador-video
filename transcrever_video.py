@@ -31,6 +31,8 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         help="Pasta base das saidas. Padrao: ./saidas",
     )
+    parser.add_argument("--inicio", type=float, default=0.0, help="Inicio do trecho em segundos.")
+    parser.add_argument("--fim", type=float, help="Fim do trecho em segundos.")
     return parser.parse_args()
 
 
@@ -73,6 +75,8 @@ def main() -> None:
             output_root=output_root,
             model_profile=args.perfil,
             language=args.idioma,
+            start_seconds=args.inicio,
+            end_seconds=args.fim,
         ),
         progress_callback=progress_handler,
         log_callback=log,

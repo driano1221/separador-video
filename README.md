@@ -1,15 +1,33 @@
 # Separador e Transcritor de Video
 
-Aplicativo para Windows que divide videos em partes iguais e gera transcricoes em texto, legenda SRT, VTT e JSON.
+Ferramenta local para Windows: recorta, divide, comprime e transcreve videos. FFmpeg + Faster-Whisper, CUDA quando disponivel e CPU como fallback.
+
+![Interface de corte](assets/interface_corte.png)
+
+![Interface de transcricao](assets/interface_transcricao.png)
+
+## Comece aqui
+
+| Objetivo | Caminho |
+| --- | --- |
+| Usar o programa | Leia [Como abrir](#como-abrir) e [Como usar](#como-usar). |
+| Entender o codigo | Consulte [Arquitetura](docs/ARQUITETURA.md). |
+| Auditar ou validar | Siga o [Guia de auditoria](docs/AUDITORIA.md). |
+| Gerar o executavel | Consulte [Build e distribuicao](docs/BUILD_E_DISTRIBUICAO.md). |
+| Contribuir | Leia [CONTRIBUTING.md](CONTRIBUTING.md). |
 
 ## O que ele faz
 
 - Divide videos em 2, 3 ou 4 partes.
+- Recorta um intervalo exato do video.
+- Permite escolher inicio e fim no formato `HH:MM:SS`.
 - Comprime os videos usando FFmpeg.
 - Usa aceleração NVIDIA NVENC quando disponível.
 - Transcreve audio/video em português.
 - Gera arquivos `.txt`, `.srt`, `.vtt` e `.json`.
 - Organiza tudo dentro da pasta `saidas/`.
+
+Na amostra local de 120 segundos em portugues, o perfil equilibrado caiu de aproximadamente 55 s no backend anterior para 6,6 s com Faster-Whisper Turbo em uma RTX 3050 Laptop de 4 GB. Medicao e limites: [docs/INFERENCIA.md](docs/INFERENCIA.md).
 
 ## Requisitos
 
@@ -17,6 +35,22 @@ Aplicativo para Windows que divide videos em partes iguais e gera transcricoes e
 - Python 3.11 ou superior.
 - FFmpeg instalado.
 - Internet na primeira transcricao, para baixar o modelo Whisper.
+
+## Estrutura do repositorio
+
+```text
+app/                    nucleos e interface grafica
+assets/                 icone e imagens da interface
+docs/                   arquitetura, auditoria e decisoes tecnicas
+tests/                  testes automatizados pequenos
+SeparadorVideo.pyw      entrada principal sem terminal
+separar_video.py        CLI de corte, divisao e compressao
+transcrever_video.py    CLI de transcricao
+INSTALAR_WINDOWS.ps1    instalacao das dependencias
+CRIAR_EXECUTAVEL.ps1    build e ZIP para Windows
+```
+
+Arquivos grandes e privados, como videos, transcricoes, modelos e builds, ficam fora do Git. Veja a lista e os motivos no [guia de auditoria](docs/AUDITORIA.md).
 
 ## Instalacao
 
@@ -38,6 +72,18 @@ Feche e abra o PowerShell depois da instalacao do FFmpeg.
 
 ## Como abrir
 
+### Executavel pronto
+
+Extraia todo o arquivo `SeparadorVideo_Windows.zip` e abra:
+
+```text
+SeparadorVideo.exe
+```
+
+O pacote ja inclui FFmpeg e nao precisa de Python. Nao mova somente o `.exe`: mantenha a pasta `_internal` ao lado dele.
+
+### Pelo codigo-fonte
+
 Clique duas vezes em:
 
 ```text
@@ -57,8 +103,9 @@ SeparadorVideo_erro.log
 1. Clique em `Escolher video`.
 2. Selecione o arquivo `.mp4`, `.mov`, `.mkv`, `.avi`, `.m4v` ou `.webm`.
 3. Escolha a pasta de saida, se quiser mudar.
-4. Para dividir o video, escolha 2, 3 ou 4 partes e clique em `Processar video`.
-5. Para transcrever, escolha o perfil e o idioma e clique em `Transcrever video`.
+4. Marque `Usar apenas um trecho` para informar inicio e fim.
+5. Em `Cortar e dividir`, escolha `Recorte unico` ou 2 a 4 partes e clique em `Gerar video`.
+6. Em `Transcrever`, escolha modelo e idioma e clique em `Transcrever`.
 
 As saidas ficam organizadas assim:
 
@@ -79,12 +126,21 @@ saidas/
 ## Perfis de transcricao
 
 - `Rapida`: usa modelo menor. Boa para testes.
-- `Equilibrada`: melhor equilibrio entre qualidade e velocidade.
+- `Equilibrada`: usa Whisper Turbo multilingue na GPU. E a opcao recomendada para portugues.
 - `Maxima qualidade`: melhor resultado, mas demora mais.
 
 Na primeira vez, o modelo pode demorar para baixar.
+Se uma transcricao for interrompida, execute-a novamente com as mesmas opcoes: o app retoma do ultimo ponto salvo.
+
+Em placas NVIDIA com 4 GB de memoria, o perfil equilibrado usa quantizacao `int8_float16` para ganhar velocidade e evitar falta de memoria. Se a GPU nao estiver disponivel, o app continua automaticamente pela CPU.
 
 ## Linha de comando
+
+Recortar do minuto 8 ate 1 hora e 12 minutos:
+
+```powershell
+python separar_video.py -i "C:\caminho\video.mp4" -p 1 --inicio 480 --fim 4320
+```
 
 Dividir em 3 partes:
 
@@ -98,12 +154,41 @@ Transcrever:
 python transcrever_video.py -i "C:\caminho\video.mp4" --perfil equilibrada --idioma pt
 ```
 
+Transcrever somente um intervalo:
+
+```powershell
+python transcrever_video.py -i "C:\caminho\video.mp4" --perfil equilibrada --idioma pt --inicio 480 --fim 4320
+```
+
+## Gerar o executavel
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\CRIAR_EXECUTAVEL.ps1
+```
+
+O executavel fica em `executaveis/SeparadorVideo/` e o ZIP para distribuicao em `executaveis/SeparadorVideo_Windows.zip`.
+
+As instrucoes de validacao e publicacao estao em [Build e distribuicao](docs/BUILD_E_DISTRIBUICAO.md).
+
+## Desenvolvimento e auditoria
+
+Verificacao rapida:
+
+```powershell
+python -m unittest discover -s tests -v
+python app\video_splitter_gui.py --self-test
+git diff --check
+```
+
+Documentacao tecnica completa: [docs/README.md](docs/README.md).
+
 ## Observacoes
 
 - Videos, transcricoes, modelos baixados e executaveis gerados nao ficam no GitHub.
 - O FFmpeg precisa estar instalado no Windows ou colocado em `ferramentas/ffmpeg/bin/`.
 - O desempenho depende do tamanho do video, do processador e da placa de video.
+- O app procura automaticamente CUDA instalado pelo PyTorch ou CUDA Toolkit. Sem essas DLLs, continua pela CPU.
 
 ## Licenca
 
-MIT.
+[MIT](LICENSE).

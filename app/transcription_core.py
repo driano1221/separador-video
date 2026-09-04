@@ -1,19 +1,18 @@
 import json
 import os
-import shutil
+import sys
 import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from subprocess import CalledProcessError, run
 from typing import Any
 
 os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
 os.environ.setdefault("HF_HUB_DOWNLOAD_TIMEOUT", "60")
 os.environ.setdefault("HF_HUB_ETAG_TIMEOUT", "60")
 
-import ctranslate2
 from huggingface_hub import snapshot_download
-from faster_whisper import WhisperModel
 
 from app.video_splitter_core import (
     LogCallback,
@@ -22,16 +21,149 @@ from app.video_splitter_core import (
     emit_log,
     emit_progress,
     ffprobe_video,
+    format_path_time,
     get_project_root,
+    resolve_time_range,
+    resolve_tool,
 )
 
 
 OPENAI_WHISPER_MODULE = None
+OPENAI_WHISPER_RUNTIME_READY = False
+CTRANSLATE2_MODULE = None
+FASTER_WHISPER_MODEL_CLASS = None
+FASTER_WHISPER_MODEL_CACHE: dict[str, Any] = {}
+FASTER_WHISPER_MODEL_CACHE_LOCK = threading.Lock()
+CUDA_DLL_DIRECTORY_HANDLES: list[Any] = []
+
+
+def configure_cuda_runtime_paths() -> None:
+    if os.name != "nt" or CUDA_DLL_DIRECTORY_HANDLES:
+        return
+
+    candidates: list[Path] = []
+    cuda_path = os.environ.get("CUDA_PATH")
+    if cuda_path:
+        candidates.append(Path(cuda_path) / "bin")
+
+    local_appdata = os.environ.get("LOCALAPPDATA")
+    if local_appdata:
+        python_root = Path(local_appdata) / "Programs" / "Python"
+        candidates.extend(python_root.glob("Python*/Lib/site-packages/torch/lib"))
+
+    for search_path in sys.path:
+        if search_path:
+            candidates.append(Path(search_path) / "torch" / "lib")
+
+    seen: set[Path] = set()
+    add_dll_directory = getattr(os, "add_dll_directory", None)
+    for candidate in candidates:
+        try:
+            resolved = candidate.resolve()
+        except OSError:
+            continue
+        if resolved in seen or not resolved.exists():
+            continue
+        seen.add(resolved)
+        os.environ["PATH"] = f"{resolved}{os.pathsep}{os.environ.get('PATH', '')}"
+        if add_dll_directory is not None:
+            try:
+                CUDA_DLL_DIRECTORY_HANDLES.append(add_dll_directory(str(resolved)))
+            except OSError:
+                continue
+
+
+def is_cuda_runtime_available() -> bool:
+    if os.name != "nt":
+        return True
+    configure_cuda_runtime_paths()
+    try:
+        import ctypes
+
+        ctypes.WinDLL("cublas64_12.dll")
+        ctypes.WinDLL("cudnn64_9.dll")
+        return True
+    except (OSError, AttributeError):
+        return False
+
+
+def configure_openai_whisper_runtime() -> None:
+    global OPENAI_WHISPER_RUNTIME_READY
+    if OPENAI_WHISPER_RUNTIME_READY:
+        return
+
+    ffmpeg_path = resolve_tool("ffmpeg")
+
+    try:
+        import torch
+    except Exception:
+        torch = None
+
+    if torch is not None:
+        torch_lib_dir = Path(torch.__file__).resolve().parent / "lib"
+        if torch_lib_dir.exists():
+            os.environ["PATH"] = f"{torch_lib_dir}{os.pathsep}{os.environ.get('PATH', '')}"
+            add_dll_directory = getattr(os, "add_dll_directory", None)
+            if add_dll_directory is not None:
+                add_dll_directory(str(torch_lib_dir))
+
+    try:
+        import whisper.audio as whisper_audio
+    except Exception:
+        OPENAI_WHISPER_RUNTIME_READY = True
+        return
+
+    def load_audio_with_resolved_ffmpeg(file: str, sr: int = whisper_audio.SAMPLE_RATE):
+        cmd = [
+            ffmpeg_path,
+            "-nostdin",
+            "-threads",
+            "0",
+            "-i",
+            file,
+            "-f",
+            "s16le",
+            "-ac",
+            "1",
+            "-acodec",
+            "pcm_s16le",
+            "-ar",
+            str(sr),
+            "-",
+        ]
+        try:
+            out = run(cmd, capture_output=True, check=True).stdout
+        except CalledProcessError as error:
+            raise RuntimeError(f"Failed to load audio: {error.stderr.decode()}") from error
+        return whisper_audio.np.frombuffer(out, whisper_audio.np.int16).flatten().astype(whisper_audio.np.float32) / 32768.0
+
+    whisper_audio.load_audio = load_audio_with_resolved_ffmpeg
+    OPENAI_WHISPER_RUNTIME_READY = True
+
+
+def get_ctranslate2():
+    global CTRANSLATE2_MODULE
+    if CTRANSLATE2_MODULE is None:
+        configure_cuda_runtime_paths()
+        import ctranslate2
+
+        CTRANSLATE2_MODULE = ctranslate2
+    return CTRANSLATE2_MODULE
+
+
+def get_faster_whisper_model_class():
+    global FASTER_WHISPER_MODEL_CLASS
+    if FASTER_WHISPER_MODEL_CLASS is None:
+        from faster_whisper import WhisperModel
+
+        FASTER_WHISPER_MODEL_CLASS = WhisperModel
+    return FASTER_WHISPER_MODEL_CLASS
 
 
 def get_openai_whisper():
     global OPENAI_WHISPER_MODULE
     if OPENAI_WHISPER_MODULE is None:
+        configure_openai_whisper_runtime()
         try:
             import whisper as openai_whisper
         except Exception as error:  # noqa: BLE001
@@ -59,14 +191,20 @@ TRANSCRIPTION_MODELS = {
     },
     "equilibrada": {
         "label": "Equilibrada (recomendada)",
-        "model_id": "distil-large-v3",
-        "description": "Melhor equilibrio entre qualidade e velocidade para reunioes.",
+        "model_id": "turbo",
+        "description": "Alta qualidade em portugues com inferencia rapida na GPU.",
     },
     "maxima": {
         "label": "Maxima qualidade",
         "model_id": "large-v3",
         "description": "Maior qualidade, com custo maior de download e processamento.",
     },
+}
+
+FASTER_WHISPER_REPOSITORIES = {
+    "small": "Systran/faster-whisper-small",
+    "turbo": "mobiuslabsgmbh/faster-whisper-large-v3-turbo",
+    "large-v3": "Systran/faster-whisper-large-v3",
 }
 
 TRANSCRIPTION_LANGUAGES = {
@@ -107,6 +245,8 @@ class TranscriptionOptions:
     task: str = "transcribe"
     word_timestamps: bool = True
     vad_filter: bool = True
+    start_seconds: float = 0.0
+    end_seconds: float | None = None
 
 
 @dataclass
@@ -302,8 +442,7 @@ def ensure_transcription_model(
     emit_log(log_callback, f"Baixando modelo '{model_id}'. Isso pode levar varios minutos na primeira vez.")
     emit_log(log_callback, f"Pasta do modelo: {model_path}")
     if model_path.exists():
-        emit_log(log_callback, "Cache parcial encontrado. Limpando arquivos incompletos antes de tentar novamente.")
-        shutil.rmtree(model_path, ignore_errors=True)
+        emit_log(log_callback, "Cache parcial encontrado. O download continuara de onde parou.")
     model_path.mkdir(parents=True, exist_ok=True)
     emit_progress(
         progress_callback,
@@ -326,7 +465,7 @@ def ensure_transcription_model(
     monitor.start()
     try:
         snapshot_download(
-            repo_id=f"Systran/faster-whisper-{model_id}",
+            repo_id=FASTER_WHISPER_REPOSITORIES[model_id],
             local_dir=str(model_path),
             cache_dir=str(get_hf_cache_root()),
             local_files_only=False,
@@ -443,8 +582,37 @@ def prepare_transcription_model(
             "model_id": preferred_profile["model_id"],
             "model_path": model_path,
         }
-    except RuntimeError as error:
+    except Exception as error:  # noqa: BLE001
         emit_log(log_callback, f"Faster-Whisper indisponivel: {error}")
+        emit_log(log_callback, "Tentando backend alternativo OpenAI Whisper.")
+        emit_progress(
+            progress_callback,
+            {
+                "percent": 0.0,
+                "elapsed_seconds": 0.0,
+                "remaining_seconds": 0.0,
+                "speed": "fallback",
+                "label": "Mudando para backend alternativo...",
+                "indeterminate": True,
+                "details_text": "Hugging Face falhou. O app vai usar OpenAI Whisper para continuar.",
+            },
+        )
+        try:
+            fallback_profile = resolve_openai_profile(model_profile)
+            model_path = ensure_openai_transcription_model(
+                model_profile,
+                progress_callback=progress_callback,
+                log_callback=log_callback,
+            )
+            return {
+                "backend": "openai-whisper",
+                "model_id": fallback_profile["model_id"],
+                "model_path": model_path,
+                "fallback_from_error": str(error),
+            }
+        except Exception as openai_error:  # noqa: BLE001
+            emit_log(log_callback, f"Backend alternativo OpenAI Whisper falhou: {openai_error}")
+
         if is_model_downloaded("small"):
             fallback_path = get_local_model_path("small")
             emit_log(
@@ -474,35 +642,20 @@ def prepare_transcription_model(
         except RuntimeError as small_error:
             emit_log(log_callback, f"Fallback local 'small' tambem falhou: {small_error}")
 
-        emit_log(log_callback, "Tentando backend alternativo OpenAI Whisper.")
-        emit_progress(
-            progress_callback,
-            {
-                "percent": 0.0,
-                "elapsed_seconds": 0.0,
-                "remaining_seconds": 0.0,
-                "speed": "fallback",
-                "label": "Mudando para backend alternativo...",
-                "indeterminate": True,
-                "details_text": "Hugging Face falhou. O app vai usar OpenAI Whisper para continuar.",
-            },
-        )
-        fallback_profile = resolve_openai_profile(model_profile)
-        model_path = ensure_openai_transcription_model(
-            model_profile,
-            progress_callback=progress_callback,
-            log_callback=log_callback,
-        )
-        return {
-            "backend": "openai-whisper",
-            "model_id": fallback_profile["model_id"],
-            "model_path": model_path,
-            "fallback_from_error": str(error),
-        }
+        raise RuntimeError("Nenhum backend de transcricao ficou disponivel nesta maquina.") from error
 
 
-def build_transcription_output_dir(output_root: Path, input_path: Path) -> Path:
-    output_dir = output_root / input_path.stem / "transcricao"
+def build_transcription_output_dir(
+    output_root: Path,
+    input_path: Path,
+    start_seconds: float = 0.0,
+    end_seconds: float | None = None,
+) -> Path:
+    folder_name = "transcricao"
+    if start_seconds > 0 or end_seconds is not None:
+        assert end_seconds is not None
+        folder_name += f"_{format_path_time(start_seconds)}_a_{format_path_time(end_seconds)}"
+    output_dir = output_root / input_path.stem / folder_name
     output_dir.mkdir(parents=True, exist_ok=True)
     return output_dir
 
@@ -516,8 +669,11 @@ def resolve_language(language_key: str) -> str | None:
 
 
 def choose_device_and_compute_type() -> tuple[str, str]:
-    if ctranslate2.get_cuda_device_count() > 0:
-        return "cuda", "float16"
+    try:
+        if get_ctranslate2().get_cuda_device_count() > 0 and is_cuda_runtime_available():
+            return "cuda", "int8_float16"
+    except Exception:
+        pass
     return "cpu", "int8"
 
 
@@ -628,6 +784,104 @@ def serialize_openai_segments(segments: list[dict[str, Any]]) -> list[dict[str, 
     return serialized
 
 
+def load_faster_whisper_model(
+    model_path: Path,
+    device: str,
+    compute_type: str,
+    log_callback: LogCallback | None = None,
+) -> tuple[Any, str, str]:
+    cache_key = f"{model_path.resolve()}|{device}|{compute_type}"
+    with FASTER_WHISPER_MODEL_CACHE_LOCK:
+        cached_model = FASTER_WHISPER_MODEL_CACHE.get(cache_key)
+        if cached_model is not None:
+            emit_log(log_callback, "Modelo ja estava carregado na memoria.")
+            return cached_model, device, compute_type
+
+        try:
+            model = get_faster_whisper_model_class()(
+                str(model_path),
+                device=device,
+                compute_type=compute_type,
+                local_files_only=True,
+            )
+        except Exception as error:  # noqa: BLE001
+            if device != "cuda":
+                raise RuntimeError(
+                    "Nao foi possivel carregar o modelo local do Faster-Whisper."
+                ) from error
+            emit_log(log_callback, f"GPU indisponivel para este modelo: {error}")
+            emit_log(log_callback, "Continuando pela CPU com quantizacao int8.")
+            device, compute_type = "cpu", "int8"
+            cache_key = f"{model_path.resolve()}|{device}|{compute_type}"
+            model = FASTER_WHISPER_MODEL_CACHE.get(cache_key)
+            if model is None:
+                model = get_faster_whisper_model_class()(
+                    str(model_path),
+                    device=device,
+                    compute_type=compute_type,
+                    local_files_only=True,
+                )
+
+        FASTER_WHISPER_MODEL_CACHE.clear()
+        FASTER_WHISPER_MODEL_CACHE[cache_key] = model
+        return model, device, compute_type
+
+
+def transcription_checkpoint_path(output_dir: Path, input_path: Path) -> Path:
+    return output_dir / f"{input_path.stem}_transcricao.parcial.json"
+
+
+def transcription_checkpoint_metadata(
+    input_path: Path,
+    model_id: str,
+    options: TranscriptionOptions,
+) -> dict[str, Any]:
+    input_stat = input_path.stat()
+    return {
+        "input_file": str(input_path),
+        "input_size": input_stat.st_size,
+        "input_mtime_ns": input_stat.st_mtime_ns,
+        "model_id": model_id,
+        "language": options.language,
+        "task": options.task,
+        "word_timestamps": options.word_timestamps,
+        "vad_filter": options.vad_filter,
+        "start_seconds": options.start_seconds,
+        "end_seconds": options.end_seconds,
+    }
+
+
+def load_transcription_checkpoint(
+    checkpoint_path: Path,
+    expected_metadata: dict[str, Any],
+) -> list[dict[str, Any]]:
+    if not checkpoint_path.exists():
+        return []
+    try:
+        checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+        if checkpoint.get("metadata") != expected_metadata:
+            return []
+        segments = checkpoint.get("segments")
+        if not isinstance(segments, list):
+            return []
+        return segments
+    except (OSError, ValueError, TypeError):
+        return []
+
+
+def save_transcription_checkpoint(
+    checkpoint_path: Path,
+    metadata: dict[str, Any],
+    segments: list[dict[str, Any]],
+) -> None:
+    temporary_path = checkpoint_path.with_suffix(checkpoint_path.suffix + ".tmp")
+    temporary_path.write_text(
+        json.dumps({"metadata": metadata, "segments": segments}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    os.replace(temporary_path, checkpoint_path)
+
+
 def process_transcription(
     options: TranscriptionOptions,
     progress_callback: ProgressCallback | None = None,
@@ -641,8 +895,6 @@ def process_transcription(
 
     output_root = options.output_root.resolve() if options.output_root else default_output_root()
     output_root.mkdir(parents=True, exist_ok=True)
-    output_dir = build_transcription_output_dir(output_root, input_path)
-
     requested_profile_key = options.model_profile
     profile = resolve_transcription_profile(requested_profile_key)
     language = resolve_language(options.language)
@@ -655,6 +907,22 @@ def process_transcription(
     model_id = str(prepared["model_id"])
     model_path = Path(prepared["model_path"])
 
+    probe_data = ffprobe_video(input_path)
+    total_duration = float(probe_data["format"]["duration"])
+    range_start, range_end = resolve_time_range(
+        total_duration,
+        options.start_seconds,
+        options.end_seconds,
+    )
+    selected_duration = range_end - range_start
+    custom_range = range_start > 0 or range_end < total_duration
+    output_dir = build_transcription_output_dir(
+        output_root,
+        input_path,
+        range_start if custom_range else 0.0,
+        range_end if custom_range else None,
+    )
+
     if backend == "faster-whisper":
         device, compute_type = choose_device_and_compute_type()
     else:
@@ -665,6 +933,7 @@ def process_transcription(
     transcript_srt = output_dir / f"{input_path.stem}_transcricao.srt"
     transcript_vtt = output_dir / f"{input_path.stem}_transcricao.vtt"
     transcript_json = output_dir / f"{input_path.stem}_transcricao.json"
+    checkpoint_path = transcription_checkpoint_path(output_dir, input_path)
 
     emit_log(log_callback, f"Video: {input_path.name}")
     emit_log(log_callback, f"Perfil de transcricao: {profile['label']}")
@@ -685,44 +954,80 @@ def process_transcription(
     emit_log(log_callback, f"Idioma: {TRANSCRIPTION_LANGUAGES.get(options.language, TRANSCRIPTION_LANGUAGES['pt'])['label']}")
     emit_log(log_callback, f"Runtime: {device} | {compute_type}")
     emit_log(log_callback, f"Saida: {output_dir}")
+    emit_log(
+        log_callback,
+        f"Trecho selecionado: {format_timestamp(range_start)} a {format_timestamp(range_end)}",
+    )
     emit_log(log_callback, "Carregando modelo de transcricao na memoria.")
-    probe_data = ffprobe_video(input_path)
-    total_duration = float(probe_data["format"]["duration"])
     started_at = time.monotonic()
+    resumed_from = 0.0
 
     if backend == "faster-whisper":
         try:
-            model = WhisperModel(
-                str(model_path),
-                device=device,
-                compute_type=compute_type,
-                local_files_only=True,
+            model, device, compute_type = load_faster_whisper_model(
+                model_path,
+                device,
+                compute_type,
+                log_callback,
             )
         except Exception as error:  # noqa: BLE001
             raise RuntimeError(
                 "Nao foi possivel carregar o modelo local do Faster-Whisper."
             ) from error
 
+        checkpoint_metadata = transcription_checkpoint_metadata(input_path, model_id, options)
+        serialized_segments = load_transcription_checkpoint(checkpoint_path, checkpoint_metadata)
+        if serialized_segments:
+            resumed_from = float(serialized_segments[-1]["end"])
+            emit_log(
+                log_callback,
+                f"Retomando transcricao interrompida em {format_timestamp(resumed_from)}.",
+            )
+
         emit_log(log_callback, "Modelo pronto. Iniciando transcricao.")
+        transcribe_options: dict[str, Any] = {
+            "language": language,
+            "task": options.task,
+            "vad_filter": options.vad_filter,
+            "word_timestamps": options.word_timestamps,
+            "beam_size": 5,
+            "condition_on_previous_text": False,
+        }
+        processing_start = resumed_from if resumed_from > 0 else range_start
+        if custom_range or resumed_from > 0:
+            transcribe_options["clip_timestamps"] = f"{processing_start:.3f},{range_end:.3f}"
         segments_iterable, info = model.transcribe(
             str(input_path),
-            language=language,
-            task=options.task,
-            vad_filter=options.vad_filter,
-            word_timestamps=options.word_timestamps,
-            beam_size=5,
+            **transcribe_options,
         )
 
-        serialized_segments: list[dict[str, Any]] = []
-        text_parts: list[str] = []
+        text_parts = [segment["text"].strip() for segment in serialized_segments]
+        last_checkpoint_at = time.monotonic()
+        unsaved_segments = 0
         for raw_segment in segments_iterable:
             segment = serialize_segments([raw_segment])[0]
+            if segment["end"] <= resumed_from:
+                continue
             serialized_segments.append(segment)
             text_parts.append(segment["text"].strip())
+            unsaved_segments += 1
+            now = time.monotonic()
+            if unsaved_segments >= 20 or now - last_checkpoint_at >= 10.0:
+                save_transcription_checkpoint(
+                    checkpoint_path,
+                    checkpoint_metadata,
+                    serialized_segments,
+                )
+                last_checkpoint_at = now
+                unsaved_segments = 0
             elapsed_wall = time.monotonic() - started_at
-            percent = min((segment["end"] / max(total_duration, 0.001)) * 100, 100.0)
-            remaining_audio = max(total_duration - segment["end"], 0.0)
-            speed_value = (segment["end"] / elapsed_wall) if elapsed_wall > 0 else 0.0
+            percent = min(
+                (max(segment["end"] - range_start, 0.0) / max(selected_duration, 0.001)) * 100,
+                100.0,
+            )
+            remaining_audio = max(range_end - segment["end"], 0.0)
+            processed_audio = max(segment["end"] - processing_start, 0.0)
+            speed_value = (processed_audio / elapsed_wall) if elapsed_wall > 0 else 0.0
             eta_seconds = (remaining_audio / speed_value) if speed_value > 0 else 0.0
             emit_progress(
                 progress_callback,
@@ -761,9 +1066,10 @@ def process_transcription(
                 str(input_path),
                 language=language,
                 task=options.task,
-                word_timestamps=options.word_timestamps,
+                word_timestamps=False,
                 verbose=False,
                 fp16=device == "cuda",
+                clip_timestamps=f"{range_start:.3f},{range_end:.3f}" if custom_range else "0",
             )
         except Exception as error:  # noqa: BLE001
             raise RuntimeError(
@@ -773,11 +1079,13 @@ def process_transcription(
         serialized_segments = serialize_openai_segments(openai_result.get("segments", []))
         text_parts = [segment["text"].strip() for segment in serialized_segments]
 
+        openai_language = openai_result.get("language") or language or "auto"
+
         class OpenAIInfo:
-            language = openai_result.get("language", language or "auto")
+            language = openai_language
             language_probability = 1.0
-            duration = total_duration
-            duration_after_vad = total_duration
+            duration = selected_duration
+            duration_after_vad = selected_duration
 
         info = OpenAIInfo()
 
@@ -794,16 +1102,25 @@ def process_transcription(
                 "input_file": str(input_path),
                 "model_id": model_id,
                 "backend": backend,
+                "device": device,
+                "compute_type": compute_type,
+                "elapsed_seconds": time.monotonic() - started_at,
+                "resumed_from_seconds": resumed_from,
+                "range_start_seconds": range_start,
+                "range_end_seconds": range_end,
                 "language": info.language,
                 "language_probability": info.language_probability,
-                "duration": info.duration,
-                "duration_after_vad": info.duration_after_vad,
+                "source_duration": total_duration,
+                "duration": selected_duration,
+                "duration_after_vad": min(float(info.duration_after_vad), selected_duration),
                 "segments": serialized_segments,
             },
             ensure_ascii=False,
             indent=2,
         ),
     )
+    if checkpoint_path.exists():
+        checkpoint_path.unlink(missing_ok=True)
 
     emit_progress(
         progress_callback,
@@ -813,7 +1130,7 @@ def process_transcription(
             "elapsed_seconds": time.monotonic() - started_at,
             "remaining_seconds": 0.0,
             "speed": "concluido",
-            "processed_seconds": total_duration,
+            "processed_seconds": selected_duration,
             "done": True,
         },
     )
@@ -831,7 +1148,7 @@ def process_transcription(
         transcript_json=transcript_json,
         language=info.language,
         language_probability=info.language_probability,
-        duration=info.duration,
+        duration=selected_duration,
         segments_count=len(serialized_segments),
         model_id=model_id,
         backend=backend,

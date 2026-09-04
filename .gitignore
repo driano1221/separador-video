@@ -12,9 +12,18 @@ pip-wheel-metadata/
 
 # Local app output
 saidas/
+saidas_testes/
+saidas_testes_interface/
+artifacts/
 SeparadorVideo_erro.log
+ffmpeg2pass-*
 *.lnk
 *.bat
+
+# Local-only helpers (not part of this project)
+CorrigirTeclado.cmd
+CorrigirTeclado.ps1
+transcrever_openai_gpu.py
 
 # Videos and generated media
 *.mp4
@@ -34,6 +43,7 @@ ferramentas/modelos/
 ferramentas/build/
 ferramentas/build_pasta/
 ferramentas/build_corrigido/
+ferramentas/build_novo/
 ferramentas/encoder_cache.json
 
 # PyInstaller
